@@ -1,5 +1,3 @@
-// Exact seed data as specified in the lab problem statement.
-// Do NOT modify usernames, emails, dates, captions, locations, or image URLs.
 
 const users = [
     {
