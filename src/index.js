@@ -10,7 +10,6 @@ const app = express();
 
 app.use(express.json());
 
-
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL
 });
@@ -18,46 +17,138 @@ const pool = new Pool({
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 
-// Test database connection
+
+
 async function testConnection() {
     try {
         await prisma.$queryRaw`SELECT 1`;
-        console.log('✅ Database connection successful');
+        console.log("Database connection successful");
     } catch (error) {
-        console.error('❌ Database connection failed');
-        console.error(error);
+        console.log("Database connection failed");
+        console.log(error);
     }
 }
 
 testConnection();
 
 
+
 app.get('/health', (req, res) => {
     return res.status(200).json({
-        status: 'OK'
+        status: "OK"
     });
 });
 
-app.get('/users', async (req, res) => {
-    try {
-        const users = await prisma.user.findMany();
 
-        return res.status(200).json(users);
+
+
+
+app.get('/users', async (req, res) => {
+    let page = Number(req.query.page || 1);
+    let limit = Number(req.query.limit || 10);
+
+    const sortBy = req.query.sortBy || 'createdAt';
+    const order = req.query.order || 'desc';
+    const { isPrivate, search } = req.query;
+
+    if (
+        !Number.isInteger(page) ||
+        !Number.isInteger(limit) ||
+        page <= 0 ||
+        limit <= 0
+    ) {
+        return res.status(400).json({
+            error: "page and limit must be positive integers"
+        });
+    }
+
+    limit = Math.min(limit, 50);
+
+    if (!['createdAt', 'username', 'fullname'].includes(sortBy)) {
+        return res.status(400).json({
+            error: "sortBy must be one of: createdAt, username, fullname"
+        });
+    }
+
+    if (!['asc', 'desc'].includes(order)) {
+        return res.status(400).json({
+            error: "order must be asc or desc"
+        });
+    }
+
+    if (isPrivate !== undefined &&
+        isPrivate !== 'true' &&
+        isPrivate !== 'false') {
+        return res.status(400).json({
+            error: "isPrivate must be true or false"
+        });
+    }
+
+    const where = {};
+
+    if (isPrivate !== undefined) {
+        where.isPrivate = isPrivate === 'true';
+    }
+
+    if (search) {
+        where.OR = [
+            {
+                username: {
+                    contains: search,
+                    mode: 'insensitive'
+                }
+            },
+            {
+                fullname: {
+                    contains: search,
+                    mode: 'insensitive'
+                }
+            }
+        ];
+    }
+
+    try {
+        const [users, total] = await prisma.$transaction([
+            prisma.user.findMany({
+                where,
+                orderBy: {
+                    [sortBy]: order
+                },
+                skip: (page - 1) * limit,
+                take: limit
+            }),
+            prisma.user.count({
+                where
+            })
+        ]);
+
+        return res.status(200).json({
+            data: users,
+            meta: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit)
+            }
+        });
+
     } catch (err) {
-        console.error(err);
+        console.log(err);
 
         return res.status(500).json({
-            error: 'Internal server error'
+            error: "Internal server error"
         });
     }
 });
 
+
+// Get one user
 app.get('/users/:id', async (req, res) => {
     const id = Number(req.params.id);
 
     if (!Number.isInteger(id) || id <= 0) {
         return res.status(400).json({
-            error: 'Invalid user ID'
+            error: "Invalid user ID"
         });
     }
 
@@ -68,26 +159,29 @@ app.get('/users/:id', async (req, res) => {
 
         if (!user) {
             return res.status(404).json({
-                error: 'User not found'
+                error: "User not found"
             });
         }
 
         return res.status(200).json(user);
+
     } catch (err) {
-        console.error(err);
+        console.log(err);
 
         return res.status(500).json({
-            error: 'Internal server error'
+            error: "Internal server error"
         });
     }
 });
 
-app.post('/users', async (req, res) => {
-    const { username, email } = req.body;
 
-    if (!username || !email) {
+
+app.post('/users', async (req, res) => {
+    const { username, email, fullname, bio, isPrivate } = req.body;
+
+    if (!username || !email || !fullname) {
         return res.status(400).json({
-            error: 'username and email are required'
+            error: "username, email and fullname are required"
         });
     }
 
@@ -95,57 +189,62 @@ app.post('/users', async (req, res) => {
         const user = await prisma.user.create({
             data: {
                 username,
-                email
+                email,
+                fullname,
+                bio: bio ?? null,
+                isPrivate: isPrivate ?? false
             }
         });
 
         return res.status(201).json(user);
+
     } catch (err) {
-        console.error(err);
+        console.log(err);
 
         if (err.code === 'P2002') {
             return res.status(409).json({
-                error: 'username or email already taken'
+                error: "username or email already taken"
             });
         }
 
         return res.status(500).json({
-            error: 'Internal server error'
+            error: "Internal server error"
         });
     }
 });
 
+
+
 app.patch('/users/:id', async (req, res) => {
     const id = Number(req.params.id);
+    const { fullname, bio, isPrivate } = req.body;
 
     if (!Number.isInteger(id) || id <= 0) {
         return res.status(400).json({
-            error: 'Invalid user ID'
+            error: "Invalid user ID"
         });
     }
 
-    const { username, email, ...otherFields } = req.body;
-
     const data = {};
 
-    if (Object.hasOwn(otherFields, 'bio')) {
-        data.bio = otherFields.bio;
-    }
+    if (fullname !== undefined) data.fullname = fullname;
+    if (bio !== undefined) data.bio = bio;
+    if (isPrivate !== undefined) data.isPrivate = isPrivate;
 
     if (Object.keys(data).length === 0) {
         return res.status(400).json({
-            error: 'No editable fields provided'
+            error: "No editable fields provided"
         });
     }
 
     try {
-        const existingUser = await prisma.user.findUnique({
+        const user = await prisma.user.findUnique({
             where: { id }
         });
 
-        if (!existingUser) {
+        if (!user) {
             return res.status(404).json({
-                error: 'User not found'
+                error: "User not found"
             });
         }
 
@@ -155,21 +254,24 @@ app.patch('/users/:id', async (req, res) => {
         });
 
         return res.status(200).json(updatedUser);
+
     } catch (err) {
-        console.error(err);
+        console.log(err);
 
         return res.status(500).json({
-            error: 'Internal server error'
+            error: "Internal server error"
         });
     }
 });
+
+
 
 app.delete('/users/:id', async (req, res) => {
     const id = Number(req.params.id);
 
     if (!Number.isInteger(id) || id <= 0) {
         return res.status(400).json({
-            error: 'Invalid user ID'
+            error: "Invalid user ID"
         });
     }
 
@@ -180,7 +282,7 @@ app.delete('/users/:id', async (req, res) => {
 
         if (!user) {
             return res.status(404).json({
-                error: 'User not found'
+                error: "User not found"
             });
         }
 
@@ -189,36 +291,138 @@ app.delete('/users/:id', async (req, res) => {
         });
 
         return res.status(204).send();
+
     } catch (err) {
-        console.error(err);
+        console.log(err);
 
         return res.status(500).json({
-            error: 'Internal server error'
+            error: "Internal server error"
         });
     }
 });
 
 
 app.get('/posts', async (req, res) => {
-    try {
-        const posts = await prisma.post.findMany();
+    let page = Number(req.query.page || 1);
+    let limit = Number(req.query.limit || 10);
 
-        return res.status(200).json(posts);
+    const sortBy = req.query.sortBy || 'createdAt';
+    const order = req.query.order || 'desc';
+    const { location, search, from, to } = req.query;
+
+    if (
+        !Number.isInteger(page) ||
+        !Number.isInteger(limit) ||
+        page <= 0 ||
+        limit <= 0
+    ) {
+        return res.status(400).json({
+            error: "page and limit must be positive integers"
+        });
+    }
+
+    limit = Math.min(limit, 50);
+
+    if (!['createdAt', 'updatedAt'].includes(sortBy)) {
+        return res.status(400).json({
+            error: "sortBy must be one of: createdAt, updatedAt"
+        });
+    }
+
+    if (!['asc', 'desc'].includes(order)) {
+        return res.status(400).json({
+            error: "order must be asc or desc"
+        });
+    }
+
+    function validDate(value) {
+        if (!value) return true;
+
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+            return false;
+        }
+
+        const date = new Date(value + 'T00:00:00.000Z');
+
+        return !Number.isNaN(date.getTime()) &&
+            date.toISOString().slice(0, 10) === value;
+    }
+
+    if (!validDate(from) || !validDate(to)) {
+        return res.status(400).json({
+            error: "from and to must be valid dates"
+        });
+    }
+
+    const where = {};
+
+    if (location) {
+        where.location = {
+            equals: location,
+            mode: 'insensitive'
+        };
+    }
+
+    if (search) {
+        where.caption = {
+            contains: search,
+            mode: 'insensitive'
+        };
+    }
+
+    if (from || to) {
+        where.createdAt = {};
+
+        if (from) {
+            where.createdAt.gte = new Date(from + 'T00:00:00.000Z');
+        }
+
+        if (to) {
+            where.createdAt.lt = new Date(to + 'T00:00:00.000Z');
+        }
+    }
+
+    try {
+        const [posts, total] = await prisma.$transaction([
+            prisma.post.findMany({
+                where,
+                orderBy: {
+                    [sortBy]: order
+                },
+                skip: (page - 1) * limit,
+                take: limit
+            }),
+            prisma.post.count({
+                where
+            })
+        ]);
+
+        return res.status(200).json({
+            data: posts,
+            meta: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit)
+            }
+        });
+
     } catch (err) {
-        console.error(err);
+        console.log(err);
 
         return res.status(500).json({
-            error: 'Internal server error'
+            error: "Internal server error"
         });
     }
 });
+
 
 app.get('/posts/:id', async (req, res) => {
     const id = Number(req.params.id);
 
     if (!Number.isInteger(id) || id <= 0) {
         return res.status(400).json({
-            error: 'Invalid post ID'
+            error: "Invalid post ID"
         });
     }
 
@@ -229,26 +433,28 @@ app.get('/posts/:id', async (req, res) => {
 
         if (!post) {
             return res.status(404).json({
-                error: 'Post not found'
+                error: "Post not found"
             });
         }
 
         return res.status(200).json(post);
+
     } catch (err) {
-        console.error(err);
+        console.log(err);
 
         return res.status(500).json({
-            error: 'Internal server error'
+            error: "Internal server error"
         });
     }
 });
+
 
 app.post('/posts', async (req, res) => {
     const { imageUrl, caption, location } = req.body;
 
     if (!imageUrl) {
         return res.status(400).json({
-            error: 'imageUrl is required'
+            error: "imageUrl is required"
         });
     }
 
@@ -256,55 +462,52 @@ app.post('/posts', async (req, res) => {
         const post = await prisma.post.create({
             data: {
                 imageUrl,
-                caption,
-                location
+                caption: caption ?? null,
+                location: location ?? null
             }
         });
 
         return res.status(201).json(post);
+
     } catch (err) {
-        console.error(err);
+        console.log(err);
 
         return res.status(500).json({
-            error: 'Internal server error'
+            error: "Internal server error"
         });
     }
 });
 
+
 app.patch('/posts/:id', async (req, res) => {
     const id = Number(req.params.id);
+    const { caption, location } = req.body;
 
     if (!Number.isInteger(id) || id <= 0) {
         return res.status(400).json({
-            error: 'Invalid post ID'
+            error: "Invalid post ID"
         });
     }
 
     const data = {};
-    const { caption, location } = req.body;
 
-    if (Object.hasOwn(req.body, 'caption')) {
-        data.caption = caption;
-    }
-
-    if (Object.hasOwn(req.body, 'location')) {
-        data.location = location;
-    }
+    if (caption !== undefined) data.caption = caption;
+    if (location !== undefined) data.location = location;
 
     if (Object.keys(data).length === 0) {
         return res.status(400).json({
-            error: 'No editable fields provided'
+            error: "No editable fields provided"
         });
     }
 
     try {
-        const existingPost = await prisma.post.findUnique({
+        const post = await prisma.post.findUnique({
             where: { id }
         });
 
-        if (!existingPost) {
+        if (!post) {
             return res.status(404).json({
-                error: 'Post not found'
+                error: "Post not found"
             });
         }
 
@@ -314,21 +517,23 @@ app.patch('/posts/:id', async (req, res) => {
         });
 
         return res.status(200).json(updatedPost);
+
     } catch (err) {
-        console.error(err);
+        console.log(err);
 
         return res.status(500).json({
-            error: 'Internal server error'
+            error: "Internal server error"
         });
     }
 });
+
 
 app.delete('/posts/:id', async (req, res) => {
     const id = Number(req.params.id);
 
     if (!Number.isInteger(id) || id <= 0) {
         return res.status(400).json({
-            error: 'Invalid post ID'
+            error: "Invalid post ID"
         });
     }
 
@@ -339,7 +544,7 @@ app.delete('/posts/:id', async (req, res) => {
 
         if (!post) {
             return res.status(404).json({
-                error: 'Post not found'
+                error: "Post not found"
             });
         }
 
@@ -348,29 +553,17 @@ app.delete('/posts/:id', async (req, res) => {
         });
 
         return res.status(204).send();
+
     } catch (err) {
-        console.error(err);
+        console.log(err);
 
         return res.status(500).json({
-            error: 'Internal server error'
+            error: "Internal server error"
         });
     }
 });
 
-const server = app.listen(3000, () => {
-    console.log('Server started on port 3000');
+
+app.listen(3000, () => {
+    console.log("Server started on port 3000");
 });
-
-async function shutdown() {
-    server.close(async () => {
-        try {
-            await prisma.$disconnect();
-            await pool.end();
-            process.exit(0);
-        } catch (err) {
-            console.error('Error closing database connection:', err);
-            process.exit(1);
-        }
-    });
-}
-
