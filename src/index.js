@@ -1,24 +1,14 @@
 require('dotenv').config();
 
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
-const { PrismaPg } = require('@prisma/adapter-pg');
-const { Pool } = require('pg');
+const { prisma } = require('./db');
 
 const app = express();
 
 app.use(express.json());
 
-const pool = new Pool({
-    connectionString: process.env.DATABASE_URL
-});
-
-const adapter = new PrismaPg(pool);
-const prisma = new PrismaClient({ adapter });
-
 async function testConnection() {
     try {
-        await prisma.$queryRaw`SELECT 1`;
         console.log("Database connection successful");
     } catch (error) {
         console.log("Database connection failed");
@@ -28,7 +18,7 @@ async function testConnection() {
 
 testConnection();
 
-// Export prisma so the routers share the same database connection
+
 module.exports = { prisma };
 
 const userRouter = require('./router/userRouter');
