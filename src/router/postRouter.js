@@ -148,21 +148,41 @@ router.get('/:id', async (req, res) => {
     }
 });
 
-router.post('/', async (req, res) => {
-    const { imageUrl, caption, location } = req.body;
 
-    if (!imageUrl) {
+router.post('/', async (req, res) => {
+    const { imageUrl, caption, location, authorId } = req.body;
+
+    if (!imageUrl || authorId === undefined || authorId === null) {
         return res.status(400).json({
-            error: "imageUrl is required"
+            error: "imageUrl and authorId are required"
+        });
+    }
+
+    const parsedAuthorId = Number(authorId);
+
+    if (!Number.isInteger(parsedAuthorId) || parsedAuthorId <= 0) {
+        return res.status(400).json({
+            error: "Invalid authorId"
         });
     }
 
     try {
+        const author = await prisma.user.findUnique({
+            where: { id: parsedAuthorId }
+        });
+
+        if (!author) {
+            return res.status(404).json({
+                error: "User not found"
+            });
+        }
+
         const post = await prisma.post.create({
             data: {
                 imageUrl,
                 caption: caption ?? null,
-                location: location ?? null
+                location: location ?? null,
+                authorId: parsedAuthorId
             }
         });
 
@@ -176,6 +196,7 @@ router.post('/', async (req, res) => {
         });
     }
 });
+
 
 router.patch('/:id', async (req, res) => {
     const id = Number(req.params.id);
