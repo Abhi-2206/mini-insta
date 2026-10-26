@@ -1,3 +1,4 @@
+
 const express = require('express');
 const { prisma } = require('../index');
 
@@ -36,9 +37,11 @@ router.get('/', async (req, res) => {
         });
     }
 
-    if (isPrivate !== undefined &&
+    if (
+        isPrivate !== undefined &&
         isPrivate !== 'true' &&
-        isPrivate !== 'false') {
+        isPrivate !== 'false'
+    ) {
         return res.status(400).json({
             error: "isPrivate must be true or false"
         });
@@ -101,7 +104,6 @@ router.get('/', async (req, res) => {
     }
 });
 
-// Get one user
 router.get('/:id', async (req, res) => {
     const id = Number(req.params.id);
 
@@ -113,7 +115,28 @@ router.get('/:id', async (req, res) => {
 
     try {
         const user = await prisma.user.findUnique({
-            where: { id }
+            where: { id },
+            include: {
+                posts: {
+                    orderBy: {
+                        createdAt: 'desc'
+                    }
+                },
+                likes: {
+                    include: {
+                        post: true
+                    },
+                    orderBy: {
+                        createdAt: 'desc'
+                    }
+                },
+                _count: {
+                    select: {
+                        posts: true,
+                        likes: true
+                    }
+                }
+            }
         });
 
         if (!user) {

@@ -1,3 +1,4 @@
+
 const express = require('express');
 const { prisma } = require('../index');
 
@@ -87,6 +88,20 @@ router.get('/', async (req, res) => {
         const [posts, total] = await prisma.$transaction([
             prisma.post.findMany({
                 where,
+                include: {
+                    author: {
+                        select: {
+                            id: true,
+                            username: true,
+                            fullname: true
+                        }
+                    },
+                    _count: {
+                        select: {
+                            likes: true
+                        }
+                    }
+                },
                 orderBy: {
                     [sortBy]: order
                 },
@@ -128,7 +143,21 @@ router.get('/:id', async (req, res) => {
 
     try {
         const post = await prisma.post.findUnique({
-            where: { id }
+            where: { id },
+            include: {
+                author: {
+                    select: {
+                        id: true,
+                        username: true,
+                        fullname: true
+                    }
+                },
+                _count: {
+                    select: {
+                        likes: true
+                    }
+                }
+            }
         });
 
         if (!post) {
@@ -147,7 +176,6 @@ router.get('/:id', async (req, res) => {
         });
     }
 });
-
 
 router.post('/', async (req, res) => {
     const { imageUrl, caption, location, authorId } = req.body;
@@ -196,7 +224,6 @@ router.post('/', async (req, res) => {
         });
     }
 });
-
 
 router.patch('/:id', async (req, res) => {
     const id = Number(req.params.id);
@@ -280,5 +307,119 @@ router.delete('/:id', async (req, res) => {
         });
     }
 });
+
+
+
+router.post('/:id/like', async (req, res) => {
+    const postId = Number(req.params.id);
+    const userId = Number(req.body.userId);
+
+    if (
+        !Number.isInteger(postId) ||
+        postId <= 0 ||
+        !Number.isInteger(userId) ||
+        userId <= 0
+    ) {
+        return res.status(400).json({
+            error: "Valid post ID and userId are required"
+        });
+    }
+
+    try {
+        const post = await prisma.post.findUnique({
+            where: { id: postId }
+        });
+
+        if (!post) {
+            return res.status(404).json({
+                error: "Post not found"
+            });
+        }
+
+        const user = await prisma.user.findUnique({
+            where: { id: userId }
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                error: "User not found"
+            });
+        }
+
+        const like = await prisma.like.create({
+            data: {
+                userId,
+                postId
+            }
+        });
+
+        return res.status(201).json(like);
+
+    } catch (err) {
+        if (err.code === 'P2002') {
+            return res.status(409).json({
+                error: "Post already liked by this user"
+            });
+        }
+
+        console.log(err);
+
+        return res.status(500).json({
+            error: "Internal server error"
+        });
+    }
+});
+
+router.delete('/:id/like', async (req, res) => {
+    const postId = Number(req.params.id);
+    const userId = Number(req.body.userId);
+
+    if (
+        !Number.isInteger(postId) ||
+        postId <= 0 ||
+        !Number.isInteger(userId) ||
+        userId <= 0
+    ) {
+        return res.status(400).json({
+            error: "Valid post ID and userId are required"
+        });
+    }
+
+    try {
+        const like = await prisma.like.findUnique({
+            where: {
+                userId_postId: {
+                    userId,
+                    postId
+                }
+            }
+        });
+
+        if (!like) {
+            return res.status(404).json({
+                error: "Like not found"
+            });
+        }
+
+        await prisma.like.delete({
+            where: {
+                userId_postId: {
+                    userId,
+                    postId
+                }
+            }
+        });
+
+        return res.status(204).send();
+
+    } catch (err) {
+        console.log(err);
+
+        return res.status(500).json({
+            error: "Internal server error"
+        });
+    }
+});
+
 
 module.exports = router;
